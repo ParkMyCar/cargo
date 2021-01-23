@@ -848,13 +848,29 @@ pub struct TomlProject {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct TomlWorkspace {
-    members: Option<Vec<String>>,
-    #[serde(rename = "default-members")]
-    default_members: Option<Vec<String>>,
-    exclude: Option<Vec<String>>,
-    metadata: Option<toml::Value>,
-    resolver: Option<String>,
+    pub members: Option<Vec<String>>,
+    pub default_members: Option<Vec<String>>,
+    pub exclude: Option<Vec<String>>,
+    pub metadata: Option<toml::Value>,
+    pub resolver: Option<String>,
+
+    // Fields that can be inherited by members
+    pub dependencies: Option<BTreeMap<String, TomlDependency>>,
+    pub version: Option<String>,
+    pub authors: Option<Vec<String>>,
+    pub description: Option<String>,
+    pub homepage: Option<String>,
+    pub documentation: Option<String>,
+    pub readme: Option<StringOrBool>,
+    pub keywords: Option<Vec<String>>,
+    pub categories: Option<Vec<String>>,
+    pub license: Option<String>,
+    pub license_file: Option<String>,
+    pub repository: Option<String>,
+    pub publish: Option<bool>,
+    pub edition: Option<String>,
 }
 
 impl TomlProject {
@@ -1278,13 +1294,9 @@ impl TomlManifest {
         };
 
         let workspace_config = match (me.workspace.as_ref(), project.workspace.as_ref()) {
-            (Some(config), None) => WorkspaceConfig::Root(WorkspaceRootConfig::new(
-                package_root,
-                &config.members,
-                &config.default_members,
-                &config.exclude,
-                &config.metadata,
-            )),
+            (Some(config), None) => WorkspaceConfig::Root(
+                WorkspaceRootConfig::from_toml_workspace(package_root, &config),
+            ),
             (None, root) => WorkspaceConfig::Member {
                 root: root.cloned(),
             },
@@ -1450,13 +1462,9 @@ impl TomlManifest {
             .map(|r| ResolveBehavior::from_manifest(r))
             .transpose()?;
         let workspace_config = match me.workspace {
-            Some(ref config) => WorkspaceConfig::Root(WorkspaceRootConfig::new(
-                root,
-                &config.members,
-                &config.default_members,
-                &config.exclude,
-                &config.metadata,
-            )),
+            Some(ref config) => {
+                WorkspaceConfig::Root(WorkspaceRootConfig::from_toml_workspace(root, &config))
+            }
             None => {
                 bail!("virtual manifests must be configured with [workspace]");
             }

@@ -20,7 +20,7 @@ use crate::sources::PathSource;
 use crate::util::errors::{CargoResult, CargoResultExt, ManifestError};
 use crate::util::interning::InternedString;
 use crate::util::paths;
-use crate::util::toml::{read_manifest, TomlProfiles};
+use crate::util::toml::{read_manifest, StringOrBool, TomlDependency, TomlProfiles, TomlWorkspace};
 use crate::util::{Config, Filesystem};
 
 /// The core abstraction in Cargo for working with a workspace of crates.
@@ -122,8 +122,9 @@ pub enum WorkspaceConfig {
 
 /// Intermediate configuration of a workspace root in a manifest.
 ///
-/// Knows the Workspace Root path, as well as `members` and `exclude` lists of path patterns, which
-/// together tell if some path is recognized as a member by this root or not.
+/// Knows the Workspace Root path, `members` and `exclude` lists of path patterns, which
+/// together tell if some path is recognized as a member by this root or not. Also knows
+/// of inerhitable fields, e.g. `dependencies`, which members can inherit.
 #[derive(Debug, Clone)]
 pub struct WorkspaceRootConfig {
     root_dir: PathBuf,
@@ -131,6 +132,22 @@ pub struct WorkspaceRootConfig {
     default_members: Option<Vec<String>>,
     exclude: Vec<String>,
     custom_metadata: Option<toml::Value>,
+
+    // Fields that can be inherited by members
+    dependencies: Option<BTreeMap<String, TomlDependency>>,
+    version: Option<String>,
+    authors: Option<Vec<String>>,
+    description: Option<String>,
+    homepage: Option<String>,
+    documentation: Option<String>,
+    readme: Option<StringOrBool>,
+    keywords: Option<Vec<String>>,
+    categories: Option<Vec<String>>,
+    license: Option<String>,
+    license_file: Option<String>,
+    repository: Option<String>,
+    publish: Option<bool>,
+    edition: Option<String>,
 }
 
 /// An iterator over the member packages of a workspace, returned by
@@ -1201,20 +1218,55 @@ impl MaybePackage {
 }
 
 impl WorkspaceRootConfig {
-    /// Creates a new Intermediate Workspace Root configuration.
-    pub fn new(
-        root_dir: &Path,
-        members: &Option<Vec<String>>,
-        default_members: &Option<Vec<String>>,
-        exclude: &Option<Vec<String>>,
-        custom_metadata: &Option<toml::Value>,
-    ) -> WorkspaceRootConfig {
+    /// Creates a new Intermediate Workspace Root configuration, from a TomlWorkspace, which is a
+    /// deserialized version of a `[workspace]` table.
+    pub fn from_toml_workspace(root_dir: &Path, tw: &TomlWorkspace) -> WorkspaceRootConfig {
         WorkspaceRootConfig {
             root_dir: root_dir.to_path_buf(),
-            members: members.clone(),
-            default_members: default_members.clone(),
-            exclude: exclude.clone().unwrap_or_default(),
-            custom_metadata: custom_metadata.clone(),
+            members: tw.members.clone(),
+            default_members: tw.default_members.clone(),
+            exclude: tw.exclude.clone().unwrap_or_default(),
+            custom_metadata: tw.metadata.clone(),
+            dependencies: tw.dependencies.clone(),
+            version: tw.version.clone(),
+            authors: tw.authors.clone(),
+            description: tw.description.clone(),
+            homepage: tw.homepage.clone(),
+            documentation: tw.documentation.clone(),
+            readme: tw.readme.clone(),
+            keywords: tw.keywords.clone(),
+            categories: tw.categories.clone(),
+            license: tw.license.clone(),
+            license_file: tw.license_file.clone(),
+            repository: tw.repository.clone(),
+            publish: tw.publish.clone(),
+            edition: tw.edition.clone(),
+        }
+    }
+
+    /// Creates a new Intermediate Workspace Root configuration, from a list of the members
+    /// of the workspace.
+    pub fn from_members(root_dir: &Path, members: &Vec<String>) -> WorkspaceRootConfig {
+        WorkspaceRootConfig {
+            root_dir: root_dir.to_path_buf(),
+            members: Some(members.clone()),
+            default_members: None,
+            exclude: Default::default(),
+            custom_metadata: None,
+            dependencies: None,
+            version: None,
+            authors: None,
+            description: None,
+            homepage: None,
+            documentation: None,
+            readme: None,
+            keywords: None,
+            categories: None,
+            license: None,
+            license_file: None,
+            repository: None,
+            publish: None,
+            edition: None,
         }
     }
 
