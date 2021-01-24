@@ -543,17 +543,6 @@ impl Manifest {
             .join(".metabuild")
             .join(format!("metabuild-{}-{}.rs", self.name(), hash))
     }
-
-    /// Returns a serializable `TomlManifest` which is valid for publishing.
-    // - Path and git components of dependency specifications are removed.
-    // - License path is updated to point within the package.
-    pub fn prepare_for_publish(
-        &self,
-        _ws: &Workspace<'_>,
-        _package_root: &Path,
-    ) -> CargoResult<TomlManifest> {
-        todo!()
-    }
 }
 
 impl VirtualManifest {

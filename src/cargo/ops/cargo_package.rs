@@ -73,7 +73,12 @@ pub fn package(ws: &Workspace<'_>, opts: &PackageOpts<'_>) -> CargoResult<Option
     let config = ws.config();
     let inheritable = Some(ws.inheritable_fields().clone());
 
-    let mut src = PathSource::new(pkg.root(), pkg.package_id().source_id(), config, inheritable);
+    let mut src = PathSource::new(
+        pkg.root(),
+        pkg.package_id().source_id(),
+        config,
+        inheritable,
+    );
     src.update()?;
 
     if opts.check_metadata {

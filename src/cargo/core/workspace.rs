@@ -502,9 +502,7 @@ impl<'cfg> Workspace<'cfg> {
 
         {
             let inheritable_fields = self.inheritable_fields().clone();
-            let current = self
-                .packages
-                .load(manifest_path, inheritable_fields)?;
+            let current = self.packages.load(manifest_path, inheritable_fields)?;
             match *current.workspace_config() {
                 WorkspaceConfig::Root(_) => {
                     debug!("find_root - is root {}", manifest_path.display());
@@ -670,10 +668,7 @@ impl<'cfg> Workspace<'cfg> {
 
         let candidates = {
             let inheritable_fields = self.inheritable_fields().clone();
-            let pkg = match *self
-                .packages
-                .load(&manifest_path, inheritable_fields)?
-            {
+            let pkg = match *self.packages.load(&manifest_path, inheritable_fields)? {
                 MaybePackage::Package(ref p) => p,
                 MaybePackage::Virtual(_) => return Ok(()),
             };
@@ -966,7 +961,12 @@ impl<'cfg> Workspace<'cfg> {
                 MaybePackage::Virtual(_) => continue,
             };
             let inheritable = Some(self.inheritable_fields().clone());
-            let mut src = PathSource::new(pkg.root(), pkg.package_id().source_id(), self.config, inheritable);
+            let mut src = PathSource::new(
+                pkg.root(),
+                pkg.package_id().source_id(),
+                self.config,
+                inheritable,
+            );
             src.preload_with(pkg);
             registry.add_preloaded(Box::new(src));
         }
