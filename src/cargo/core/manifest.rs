@@ -13,7 +13,7 @@ use url::Url;
 use crate::core::compiler::CrateType;
 use crate::core::resolver::ResolveBehavior;
 use crate::core::{Dependency, PackageId, PackageIdSpec, SourceId, Summary};
-use crate::core::{Edition, Feature, Features, Workspace, WorkspaceConfig};
+use crate::core::{Edition, Feature, Features, WorkspaceConfig};
 use crate::util::errors::*;
 use crate::util::interning::InternedString;
 use crate::util::toml::{TomlManifest, TomlProfiles};

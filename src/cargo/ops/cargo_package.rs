@@ -279,6 +279,7 @@ fn build_lock(ws: &Workspace<'_>) -> CargoResult<String> {
     let toml_manifest = Rc::new(
         orig_pkg
             .manifest()
+            .original()
             .prepare_for_publish(ws, orig_pkg.root())?,
     );
     let package_root = orig_pkg.root();
