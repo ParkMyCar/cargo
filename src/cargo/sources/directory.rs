@@ -112,7 +112,7 @@ impl<'cfg> Source for DirectorySource<'cfg> {
                 continue;
             }
 
-            let mut src = PathSource::new(&path, self.source_id, self.config);
+            let mut src = PathSource::new(&path, self.source_id, self.config, None);
             src.update()?;
             let mut pkg = src.root_package()?;
 

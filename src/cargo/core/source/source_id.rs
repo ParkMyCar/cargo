@@ -281,7 +281,7 @@ impl SourceId {
                     Ok(p) => p,
                     Err(()) => panic!("path sources cannot be remote"),
                 };
-                Ok(Box::new(PathSource::new(&path, self, config)))
+                Ok(Box::new(PathSource::new(&path, self, config, None)))
             }
             SourceKind::Registry => Ok(Box::new(RegistrySource::remote(
                 self,

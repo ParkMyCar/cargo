@@ -216,7 +216,7 @@ fn sync(
         )?;
 
         let _ = fs::remove_dir_all(&dst);
-        let pathsource = PathSource::new(src, id.source_id(), config);
+        let pathsource = PathSource::new(src, id.source_id(), config, None);
         let paths = pathsource.list_files(pkg)?;
         let mut map = BTreeMap::new();
         cp_sources(src, &paths, &dst, &mut map, &mut tmp_buf)

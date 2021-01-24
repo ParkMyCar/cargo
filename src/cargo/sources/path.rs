@@ -1,6 +1,7 @@
 use std::fmt::{self, Debug, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use filetime::FileTime;
 use ignore::gitignore::GitignoreBuilder;
@@ -8,7 +9,7 @@ use ignore::Match;
 use log::{trace, warn};
 
 use crate::core::source::MaybePackage;
-use crate::core::{Dependency, Package, PackageId, Source, SourceId, Summary};
+use crate::core::{Dependency, InheritableFields, Package, PackageId, Source, SourceId, Summary};
 use crate::ops;
 use crate::util::{internal, paths, CargoResult, CargoResultExt, Config};
 
@@ -18,6 +19,7 @@ pub struct PathSource<'cfg> {
     updated: bool,
     packages: Vec<Package>,
     config: &'cfg Config,
+    inheritable: Option<Rc<InheritableFields>>,
     recursive: bool,
 }
 
@@ -26,13 +28,19 @@ impl<'cfg> PathSource<'cfg> {
     ///
     /// This source will only return the package at precisely the `path`
     /// specified, and it will be an error if there's not a package at `path`.
-    pub fn new(path: &Path, source_id: SourceId, config: &'cfg Config) -> PathSource<'cfg> {
+    pub fn new(
+        path: &Path,
+        source_id: SourceId,
+        config: &'cfg Config,
+        inheritable: Option<Rc<InheritableFields>>,
+    ) -> PathSource<'cfg> {
         PathSource {
             source_id,
             path: path.to_path_buf(),
             updated: false,
             packages: Vec::new(),
             config,
+            inheritable,
             recursive: false,
         }
     }
@@ -45,10 +53,15 @@ impl<'cfg> PathSource<'cfg> {
     ///
     /// Note that this should be used with care and likely shouldn't be chosen
     /// by default!
-    pub fn new_recursive(root: &Path, id: SourceId, config: &'cfg Config) -> PathSource<'cfg> {
+    pub fn new_recursive(
+        root: &Path,
+        id: SourceId,
+        config: &'cfg Config,
+        inheritable: Option<Rc<InheritableFields>>,
+    ) -> PathSource<'cfg> {
         PathSource {
             recursive: true,
-            ..PathSource::new(root, id, config)
+            ..PathSource::new(root, id, config, inheritable)
         }
     }
 
@@ -75,13 +88,15 @@ impl<'cfg> PathSource<'cfg> {
     }
 
     pub fn read_packages(&self) -> CargoResult<Vec<Package>> {
+        let inheritables = self.inheritable.as_ref().cloned().unwrap_or_default();
+
         if self.updated {
             Ok(self.packages.clone())
         } else if self.recursive {
-            ops::read_packages(&self.path, self.source_id, self.config)
+            ops::read_packages(&self.path, self.source_id, self.config, &inheritables)
         } else {
             let path = self.path.join("Cargo.toml");
-            let (pkg, _) = ops::read_package(&path, self.source_id, self.config)?;
+            let (pkg, _) = ops::read_package(&path, self.source_id, self.config, &inheritables)?;
             Ok(vec![pkg])
         }
     }

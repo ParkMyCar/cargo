@@ -13,7 +13,7 @@ use url::Url;
 use crate::core::compiler::CrateType;
 use crate::core::resolver::ResolveBehavior;
 use crate::core::{Dependency, PackageId, PackageIdSpec, SourceId, Summary};
-use crate::core::{Edition, Feature, Features, WorkspaceConfig};
+use crate::core::{Edition, Feature, Features, Workspace, WorkspaceConfig};
 use crate::util::errors::*;
 use crate::util::interning::InternedString;
 use crate::util::toml::{TomlManifest, TomlProfiles};
@@ -542,6 +542,17 @@ impl Manifest {
             .into_path_unlocked()
             .join(".metabuild")
             .join(format!("metabuild-{}-{}.rs", self.name(), hash))
+    }
+
+    /// Returns a serializable `TomlManifest` which is valid for publishing.
+    // - Path and git components of dependency specifications are removed.
+    // - License path is updated to point within the package.
+    pub fn prepare_for_publish(
+        &self,
+        _ws: &Workspace<'_>,
+        _package_root: &Path,
+    ) -> CargoResult<TomlManifest> {
+        todo!()
     }
 }
 

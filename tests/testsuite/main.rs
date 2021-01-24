@@ -125,8 +125,8 @@ mod verify_project;
 mod version;
 mod warn_on_failure;
 mod weak_dep_features;
-mod workspaces_dedup;
 mod workspaces;
+mod workspaces_dedup;
 mod yank;
 
 #[cargo_test]

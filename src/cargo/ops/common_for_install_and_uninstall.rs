@@ -515,7 +515,7 @@ pub fn path_source(source_id: SourceId, config: &Config) -> CargoResult<PathSour
         .url()
         .to_file_path()
         .map_err(|()| format_err!("path sources must have a valid path"))?;
-    Ok(PathSource::new(&path, source_id, config))
+    Ok(PathSource::new(&path, source_id, config, None))
 }
 
 /// Gets a Package based on command-line requirements.

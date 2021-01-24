@@ -20,7 +20,9 @@ use crate::sources::PathSource;
 use crate::util::errors::{CargoResult, CargoResultExt, ManifestError};
 use crate::util::interning::InternedString;
 use crate::util::paths;
-use crate::util::toml::{read_manifest, StringOrBool, TomlDependency, TomlProfiles, TomlWorkspace};
+use crate::util::toml::{
+    read_manifest, StringOrBool, TomlDependency, TomlProfiles, TomlWorkspace, VecStringOrBool,
+};
 use crate::util::{Config, Filesystem};
 
 /// The core abstraction in Cargo for working with a workspace of crates.
@@ -92,6 +94,9 @@ pub struct Workspace<'cfg> {
 
     /// Workspace-level custom metadata
     custom_metadata: Option<toml::Value>,
+
+    /// Fields that can be inherited by members of this workspace
+    inheritable_fields: Rc<InheritableFields>,
 }
 
 // Separate structure for tracking loaded packages (to avoid loading anything
@@ -132,22 +137,7 @@ pub struct WorkspaceRootConfig {
     default_members: Option<Vec<String>>,
     exclude: Vec<String>,
     custom_metadata: Option<toml::Value>,
-
-    // Fields that can be inherited by members
-    dependencies: Option<BTreeMap<String, TomlDependency>>,
-    version: Option<String>,
-    authors: Option<Vec<String>>,
-    description: Option<String>,
-    homepage: Option<String>,
-    documentation: Option<String>,
-    readme: Option<StringOrBool>,
-    keywords: Option<Vec<String>>,
-    categories: Option<Vec<String>>,
-    license: Option<String>,
-    license_file: Option<String>,
-    repository: Option<String>,
-    publish: Option<bool>,
-    edition: Option<String>,
+    inheritable_fields: InheritableFields,
 }
 
 /// An iterator over the member packages of a workspace, returned by
@@ -155,6 +145,44 @@ pub struct WorkspaceRootConfig {
 pub struct Members<'a, 'cfg> {
     ws: &'a Workspace<'cfg>,
     iter: slice::Iter<'a, PathBuf>,
+}
+
+/// A group of fields that are inheritable by members of the workspace
+#[derive(Clone, Debug, Default)]
+pub struct InheritableFields {
+    pub dependencies: Option<BTreeMap<String, TomlDependency>>,
+    pub version: Option<semver::Version>,
+    pub authors: Option<Vec<String>>,
+    pub description: Option<String>,
+    pub homepage: Option<String>,
+    pub documentation: Option<String>,
+    pub readme: Option<StringOrBool>,
+    pub keywords: Option<Vec<String>>,
+    pub categories: Option<Vec<String>>,
+    pub license: Option<String>,
+    pub license_file: Option<String>,
+    pub repository: Option<String>,
+    pub publish: Option<VecStringOrBool>,
+    pub edition: Option<String>,
+    pub badges: Option<BTreeMap<String, BTreeMap<String, String>>>,
+}
+
+impl InheritableFields {
+    pub fn dependency(&self, name: &String) -> Option<TomlDependency> {
+        self.dependencies
+            .as_ref()
+            .map(|deps| deps.get(name))
+            .flatten()
+            .cloned()
+    }
+
+    pub fn badge(&self, name: &String) -> Option<BTreeMap<String, String>> {
+        self.badges
+            .as_ref()
+            .map(|badges| badges.get(name))
+            .flatten()
+            .cloned()
+    }
 }
 
 impl<'cfg> Workspace<'cfg> {
@@ -177,9 +205,10 @@ impl<'cfg> Workspace<'cfg> {
             ws.root_manifest = ws.find_root(manifest_path)?;
         }
 
-        ws.custom_metadata = ws
-            .load_workspace_config()?
-            .and_then(|cfg| cfg.custom_metadata);
+        let mut config = ws.load_workspace_config()?;
+        ws.custom_metadata = config.as_mut().and_then(|c| c.custom_metadata.take());
+        ws.inheritable_fields = Rc::new(config.map(|c| c.inheritable_fields).unwrap_or_default());
+
         ws.find_members()?;
         ws.resolve_behavior = match ws.root_maybe() {
             MaybePackage::Package(p) => p.manifest().resolve_behavior(),
@@ -208,6 +237,7 @@ impl<'cfg> Workspace<'cfg> {
             ignore_lock: false,
             resolve_behavior: None,
             custom_metadata: None,
+            inheritable_fields: Default::default(),
         }
     }
 
@@ -390,6 +420,11 @@ impl<'cfg> Workspace<'cfg> {
         }
     }
 
+    /// Returns a reference to fields which members of this workspace can inherit
+    pub fn inheritable_fields(&self) -> &Rc<InheritableFields> {
+        &self.inheritable_fields
+    }
+
     /// Returns true if the package is a member of the workspace.
     pub fn is_member(&self, pkg: &Package) -> bool {
         self.member_ids.contains(&pkg.package_id())
@@ -428,7 +463,8 @@ impl<'cfg> Workspace<'cfg> {
         // If we didn't find a root, it must mean there is no [workspace] section, and thus no
         // metadata.
         if let Some(root_path) = &self.root_manifest {
-            let root_package = self.packages.load(root_path)?;
+            let inheritable_fields = self.inheritable_fields().clone();
+            let root_package = self.packages.load(root_path, inheritable_fields)?;
             match root_package.workspace_config() {
                 WorkspaceConfig::Root(ref root_config) => {
                     return Ok(Some(root_config.clone()));
@@ -465,7 +501,10 @@ impl<'cfg> Workspace<'cfg> {
         }
 
         {
-            let current = self.packages.load(manifest_path)?;
+            let inheritable_fields = self.inheritable_fields().clone();
+            let current = self
+                .packages
+                .load(manifest_path, inheritable_fields)?;
             match *current.workspace_config() {
                 WorkspaceConfig::Root(_) => {
                     debug!("find_root - is root {}", manifest_path.display());
@@ -484,9 +523,14 @@ impl<'cfg> Workspace<'cfg> {
             }
 
             let ances_manifest_path = path.join("Cargo.toml");
+            let inheritable_fields = self.inheritable_fields().clone();
             debug!("find_root - trying {}", ances_manifest_path.display());
             if ances_manifest_path.exists() {
-                match *self.packages.load(&ances_manifest_path)?.workspace_config() {
+                match *self
+                    .packages
+                    .load(&ances_manifest_path, inheritable_fields)?
+                    .workspace_config()
+                {
                     WorkspaceConfig::Root(ref ances_root_config) => {
                         debug!("find_root - found a root checking exclusion");
                         if !ances_root_config.is_excluded(manifest_path) {
@@ -610,8 +654,11 @@ impl<'cfg> Workspace<'cfg> {
             return Ok(());
         }
 
-        if let WorkspaceConfig::Root(ref root_config) =
-            *self.packages.load(root_manifest)?.workspace_config()
+        let inheritable_fields = self.inheritable_fields().clone();
+        if let WorkspaceConfig::Root(ref root_config) = *self
+            .packages
+            .load(root_manifest, inheritable_fields)?
+            .workspace_config()
         {
             if root_config.is_excluded(&manifest_path) {
                 return Ok(());
@@ -622,7 +669,11 @@ impl<'cfg> Workspace<'cfg> {
         self.members.push(manifest_path.clone());
 
         let candidates = {
-            let pkg = match *self.packages.load(&manifest_path)? {
+            let inheritable_fields = self.inheritable_fields().clone();
+            let pkg = match *self
+                .packages
+                .load(&manifest_path, inheritable_fields)?
+            {
                 MaybePackage::Package(ref p) => p,
                 MaybePackage::Virtual(_) => return Ok(()),
             };
@@ -883,7 +934,12 @@ impl<'cfg> Workspace<'cfg> {
             return Ok(p);
         }
         let source_id = SourceId::for_path(manifest_path.parent().unwrap())?;
-        let (package, _nested_paths) = ops::read_package(manifest_path, source_id, self.config)?;
+        let (package, _nested_paths) = ops::read_package(
+            manifest_path,
+            source_id,
+            self.config,
+            &self.inheritable_fields,
+        )?;
         loaded.insert(manifest_path.to_path_buf(), package.clone());
         Ok(package)
     }
@@ -909,7 +965,8 @@ impl<'cfg> Workspace<'cfg> {
                 MaybePackage::Package(ref p) => p.clone(),
                 MaybePackage::Virtual(_) => continue,
             };
-            let mut src = PathSource::new(pkg.root(), pkg.package_id().source_id(), self.config);
+            let inheritable = Some(self.inheritable_fields().clone());
+            let mut src = PathSource::new(pkg.root(), pkg.package_id().source_id(), self.config, inheritable);
             src.preload_with(pkg);
             registry.add_preloaded(Box::new(src));
         }
@@ -1169,14 +1226,18 @@ impl<'cfg> Packages<'cfg> {
         self.packages.get_mut(manifest_path.parent().unwrap())
     }
 
-    fn load(&mut self, manifest_path: &Path) -> CargoResult<&MaybePackage> {
+    fn load(
+        &mut self,
+        manifest_path: &Path,
+        inheritable: Rc<InheritableFields>,
+    ) -> CargoResult<&MaybePackage> {
         let key = manifest_path.parent().unwrap();
         match self.packages.entry(key.to_path_buf()) {
             Entry::Occupied(e) => Ok(e.into_mut()),
             Entry::Vacant(v) => {
                 let source_id = SourceId::for_path(key)?;
                 let (manifest, _nested_paths) =
-                    read_manifest(manifest_path, source_id, self.config)?;
+                    read_manifest(manifest_path, source_id, self.config, &inheritable)?;
                 Ok(v.insert(match manifest {
                     EitherManifest::Real(manifest) => {
                         MaybePackage::Package(Package::new(manifest, manifest_path))
@@ -1221,12 +1282,7 @@ impl WorkspaceRootConfig {
     /// Creates a new Intermediate Workspace Root configuration, from a TomlWorkspace, which is a
     /// deserialized version of a `[workspace]` table.
     pub fn from_toml_workspace(root_dir: &Path, tw: &TomlWorkspace) -> WorkspaceRootConfig {
-        WorkspaceRootConfig {
-            root_dir: root_dir.to_path_buf(),
-            members: tw.members.clone(),
-            default_members: tw.default_members.clone(),
-            exclude: tw.exclude.clone().unwrap_or_default(),
-            custom_metadata: tw.metadata.clone(),
+        let inheritable_fields = InheritableFields {
             dependencies: tw.dependencies.clone(),
             version: tw.version.clone(),
             authors: tw.authors.clone(),
@@ -1241,6 +1297,16 @@ impl WorkspaceRootConfig {
             repository: tw.repository.clone(),
             publish: tw.publish.clone(),
             edition: tw.edition.clone(),
+            badges: tw.badges.clone(),
+        };
+
+        WorkspaceRootConfig {
+            root_dir: root_dir.to_path_buf(),
+            members: tw.members.clone(),
+            default_members: tw.default_members.clone(),
+            exclude: tw.exclude.clone().unwrap_or_default(),
+            custom_metadata: tw.metadata.clone(),
+            inheritable_fields,
         }
     }
 
@@ -1253,20 +1319,7 @@ impl WorkspaceRootConfig {
             default_members: None,
             exclude: Default::default(),
             custom_metadata: None,
-            dependencies: None,
-            version: None,
-            authors: None,
-            description: None,
-            homepage: None,
-            documentation: None,
-            readme: None,
-            keywords: None,
-            categories: None,
-            license: None,
-            license_file: None,
-            repository: None,
-            publish: None,
-            edition: None,
+            inheritable_fields: Default::default(),
         }
     }
 

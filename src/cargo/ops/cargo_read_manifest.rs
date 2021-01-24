@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use log::{info, trace};
 
-use crate::core::{EitherManifest, Package, PackageId, SourceId};
+use crate::core::{EitherManifest, InheritableFields, Package, PackageId, SourceId};
 use crate::util::errors::CargoResult;
 use crate::util::important_paths::find_project_manifest_exact;
 use crate::util::toml::read_manifest;
@@ -15,13 +15,14 @@ pub fn read_package(
     path: &Path,
     source_id: SourceId,
     config: &Config,
+    inheritable: &InheritableFields,
 ) -> CargoResult<(Package, Vec<PathBuf>)> {
     trace!(
         "read_package; path={}; source-id={}",
         path.display(),
         source_id
     );
-    let (manifest, nested) = read_manifest(path, source_id, config)?;
+    let (manifest, nested) = read_manifest(path, source_id, config, inheritable)?;
     let manifest = match manifest {
         EitherManifest::Real(manifest) => manifest,
         EitherManifest::Virtual(..) => anyhow::bail!(
@@ -38,6 +39,7 @@ pub fn read_packages(
     path: &Path,
     source_id: SourceId,
     config: &Config,
+    inheritable: &InheritableFields,
 ) -> CargoResult<Vec<Package>> {
     let mut all_packages = HashMap::new();
     let mut visited = HashSet::<PathBuf>::new();
@@ -78,6 +80,7 @@ pub fn read_packages(
                 &mut all_packages,
                 source_id,
                 config,
+                inheritable,
                 &mut visited,
                 &mut errors,
             )?;
@@ -133,6 +136,7 @@ fn read_nested_packages(
     all_packages: &mut HashMap<PackageId, Package>,
     source_id: SourceId,
     config: &Config,
+    inheritable: &InheritableFields,
     visited: &mut HashSet<PathBuf>,
     errors: &mut Vec<anyhow::Error>,
 ) -> CargoResult<()> {
@@ -142,7 +146,7 @@ fn read_nested_packages(
 
     let manifest_path = find_project_manifest_exact(path, "Cargo.toml")?;
 
-    let (manifest, nested) = match read_manifest(&manifest_path, source_id, config) {
+    let (manifest, nested) = match read_manifest(&manifest_path, source_id, config, inheritable) {
         Err(err) => {
             // Ignore malformed manifests found on git repositories
             //
@@ -193,8 +197,15 @@ fn read_nested_packages(
     if !source_id.is_registry() {
         for p in nested.iter() {
             let path = util::normalize_path(&path.join(p));
-            let result =
-                read_nested_packages(&path, all_packages, source_id, config, visited, errors);
+            let result = read_nested_packages(
+                &path,
+                all_packages,
+                source_id,
+                config,
+                inheritable,
+                visited,
+                errors,
+            );
             // Ignore broken manifests found on git repositories.
             //
             // A well formed manifest might still fail to load due to reasons

@@ -192,7 +192,6 @@ impl Package {
     pub fn to_registry_toml(&self, ws: &Workspace<'_>) -> CargoResult<String> {
         let manifest = self
             .manifest()
-            .original()
             .prepare_for_publish(ws, self.root())?;
         let toml = toml::to_string(&manifest)?;
         Ok(format!("{}\n{}", MANIFEST_PREAMBLE, toml))

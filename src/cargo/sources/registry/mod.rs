@@ -537,7 +537,7 @@ impl<'cfg> RegistrySource<'cfg> {
         let path = self
             .unpack_package(package, path)
             .chain_err(|| format!("failed to unpack package `{}`", package))?;
-        let mut src = PathSource::new(&path, self.source_id, self.config);
+        let mut src = PathSource::new(&path, self.source_id, self.config, None);
         src.update()?;
         let mut pkg = match src.download(package)? {
             MaybePackage::Ready(pkg) => pkg,

@@ -71,8 +71,9 @@ pub fn package(ws: &Workspace<'_>, opts: &PackageOpts<'_>) -> CargoResult<Option
     }
     let pkg = ws.current()?;
     let config = ws.config();
+    let inheritable = Some(ws.inheritable_fields().clone());
 
-    let mut src = PathSource::new(pkg.root(), pkg.package_id().source_id(), config);
+    let mut src = PathSource::new(pkg.root(), pkg.package_id().source_id(), config, inheritable);
     src.update()?;
 
     if opts.check_metadata {
@@ -265,6 +266,7 @@ fn build_ar_list(
 /// Construct `Cargo.lock` for the package to be published.
 fn build_lock(ws: &Workspace<'_>) -> CargoResult<String> {
     let config = ws.config();
+    let inheritable = ws.inheritable_fields();
     let orig_resolve = ops::load_pkg_lockfile(ws)?;
 
     // Convert Package -> TomlManifest -> Manifest -> Package
@@ -272,13 +274,17 @@ fn build_lock(ws: &Workspace<'_>) -> CargoResult<String> {
     let toml_manifest = Rc::new(
         orig_pkg
             .manifest()
-            .original()
             .prepare_for_publish(ws, orig_pkg.root())?,
     );
     let package_root = orig_pkg.root();
     let source_id = orig_pkg.package_id().source_id();
-    let (manifest, _nested_paths) =
-        TomlManifest::to_real_manifest(&toml_manifest, source_id, package_root, config)?;
+    let (manifest, _nested_paths) = TomlManifest::to_real_manifest(
+        &toml_manifest,
+        source_id,
+        package_root,
+        config,
+        inheritable,
+    )?;
     let new_pkg = Package::new(manifest, orig_pkg.manifest_path());
 
     // Regenerate Cargo.lock using the old one as a guide.
@@ -667,7 +673,7 @@ fn run_verify(ws: &Workspace<'_>, tar: &FileLock, opts: &PackageOpts<'_>) -> Car
     // Manufacture an ephemeral workspace to ensure that even if the top-level
     // package has a workspace we can still build our new crate.
     let id = SourceId::for_path(&dst)?;
-    let mut src = PathSource::new(&dst, id, ws.config());
+    let mut src = PathSource::new(&dst, id, ws.config(), Some(ws.inheritable_fields().clone()));
     let new_pkg = src.root_package()?;
     let pkg_fingerprint = hash_all(&dst)?;
     let ws = Workspace::ephemeral(new_pkg, config, None, true)?;

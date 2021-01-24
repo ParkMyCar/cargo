@@ -403,7 +403,8 @@ pub fn add_overrides<'a>(
 
     for (path, definition) in paths {
         let id = SourceId::for_path(&path)?;
-        let mut source = PathSource::new_recursive(&path, id, ws.config());
+        let inheritable = Some(ws.inheritable_fields().clone());
+        let mut source = PathSource::new_recursive(&path, id, ws.config(), inheritable);
         source.update().chain_err(|| {
             format!(
                 "failed to update path override `{}` \
