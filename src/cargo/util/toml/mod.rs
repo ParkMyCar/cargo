@@ -1064,8 +1064,11 @@ struct Context<'a, 'b> {
 
 impl TomlManifest {
     /// Prepares the manfiest for publishing.
-    // - Path and git components of dependency specifications are removed.
-    // - License path is updated to point within the package.
+    /// - Path and git components of dependency specifications are removed.
+    /// - License path is updated to point within the package.
+    /// - The package's workspace needs to be None
+    /// - The package's resolver needs to be set to the workspace's
+    /// - Fields inherited from the workspace are hydrated
     pub fn prepare_for_publish(
         &self,
         ws: &Workspace<'_>,
@@ -1074,110 +1077,10 @@ impl TomlManifest {
         let config = ws.config();
         let inheritable = ws.inheritable_fields();
 
-        let mut package = self
-            .package
-            .as_ref()
-            .or_else(|| self.project.as_ref())
-            .unwrap()
-            .clone();
-        package.workspace = None;
-        package.resolver = ws.resolve_behavior().to_manifest();
-        if let Some(license_file) = &package.hydrated_license_file(inheritable) {
-            let license_path = Path::new(&license_file);
-            let abs_license_path = paths::normalize_path(&package_root.join(license_path));
-            if abs_license_path.strip_prefix(package_root).is_err() {
-                // This path points outside of the package root. `cargo package`
-                // will copy it into the root, so adjust the path to this location.
-                package.license_file = Some(MaybeWorkspace::Defined(
-                    license_path
-                        .file_name()
-                        .unwrap()
-                        .to_str()
-                        .unwrap()
-                        .to_string(),
-                ));
-            }
-        }
-        let all = |_d: &TomlDependency| true;
-        let dependencies = map_deps(
-            config,
-            self.hydrated_dependencies(inheritable)?.as_ref(),
-            all,
-        )?
-        .map(|deps| {
-            deps.into_iter()
-                .map(|(name, dep)| (name, MaybeWorkspace::Defined(dep)))
-                .collect()
-        });
-
-        return Ok(TomlManifest {
-            package: Some(package),
-            project: None,
-            profile: self.profile.clone(),
-            lib: self.lib.clone(),
-            bin: self.bin.clone(),
-            example: self.example.clone(),
-            test: self.test.clone(),
-            bench: self.bench.clone(),
-            dependencies,
-            dev_dependencies: map_deps(
-                config,
-                self.dev_dependencies
-                    .as_ref()
-                    .or_else(|| self.dev_dependencies2.as_ref()),
-                TomlDependency::is_version_specified,
-            )?,
-            dev_dependencies2: None,
-            build_dependencies: map_deps(
-                config,
-                self.build_dependencies
-                    .as_ref()
-                    .or_else(|| self.build_dependencies2.as_ref()),
-                all,
-            )?,
-            build_dependencies2: None,
-            features: self.features.clone(),
-            target: match self.target.as_ref().map(|target_map| {
-                target_map
-                    .iter()
-                    .map(|(k, v)| {
-                        Ok((
-                            k.clone(),
-                            TomlPlatform {
-                                dependencies: map_deps(config, v.dependencies.as_ref(), all)?,
-                                dev_dependencies: map_deps(
-                                    config,
-                                    v.dev_dependencies
-                                        .as_ref()
-                                        .or_else(|| v.dev_dependencies2.as_ref()),
-                                    TomlDependency::is_version_specified,
-                                )?,
-                                dev_dependencies2: None,
-                                build_dependencies: map_deps(
-                                    config,
-                                    v.build_dependencies
-                                        .as_ref()
-                                        .or_else(|| v.build_dependencies2.as_ref()),
-                                    all,
-                                )?,
-                                build_dependencies2: None,
-                            },
-                        ))
-                    })
-                    .collect()
-            }) {
-                Some(Ok(v)) => Some(v),
-                Some(Err(e)) => return Err(e),
-                None => None,
-            },
-            replace: None,
-            patch: None,
-            workspace: None,
-            badges: self.badges.clone(),
-            cargo_features: self.cargo_features.clone(),
-        });
-
-        fn map_deps(
+        /// Dependencies need to be updated to make sense, when this crate is stand-alone.
+        /// Specifically:
+        /// 1. Path and Git components of dependency specifications are removed
+        fn map_dependencies(
             config: &Config,
             deps: Option<&BTreeMap<String, TomlDependency>>,
             filter: impl Fn(&TomlDependency) -> bool,
@@ -1186,38 +1089,302 @@ impl TomlManifest {
                 Some(deps) => deps,
                 None => return Ok(None),
             };
+
+            let map_dependency = |dep: &TomlDependency| -> CargoResult<TomlDependency> {
+                match dep {
+                    TomlDependency::Detailed(d) => {
+                        let mut d = d.clone();
+                        // Path dependencies become crates.io deps.
+                        d.path.take();
+                        // Same with git dependencies.
+                        d.git.take();
+                        d.branch.take();
+                        d.tag.take();
+                        d.rev.take();
+                        // registry specifications are elaborated to the index URL
+                        if let Some(registry) = d.registry.take() {
+                            let src = SourceId::alt_registry(config, &registry)?;
+                            d.registry_index = Some(src.url().to_string());
+                        }
+                        Ok(TomlDependency::Detailed(d))
+                    }
+                    TomlDependency::Simple(s) => {
+                        Ok(TomlDependency::Detailed(DetailedTomlDependency {
+                            version: Some(s.clone()),
+                            ..Default::default()
+                        }))
+                    }
+                }
+            };
+
             let deps = deps
                 .iter()
                 .filter(|(_k, v)| filter(v))
-                .map(|(k, v)| Ok((k.clone(), map_dependency(config, v)?)))
+                .map(|(k, v)| Ok((k.clone(), map_dependency(v)?)))
                 .collect::<CargoResult<BTreeMap<_, _>>>()?;
             Ok(Some(deps))
         }
 
-        fn map_dependency(config: &Config, dep: &TomlDependency) -> CargoResult<TomlDependency> {
-            match dep {
-                TomlDependency::Detailed(d) => {
-                    let mut d = d.clone();
-                    // Path dependencies become crates.io deps.
-                    d.path.take();
-                    // Same with git dependencies.
-                    d.git.take();
-                    d.branch.take();
-                    d.tag.take();
-                    d.rev.take();
-                    // registry specifications are elaborated to the index URL
-                    if let Some(registry) = d.registry.take() {
-                        let src = SourceId::alt_registry(config, &registry)?;
-                        d.registry_index = Some(src.url().to_string());
-                    }
-                    Ok(TomlDependency::Detailed(d))
-                }
-                TomlDependency::Simple(s) => Ok(TomlDependency::Detailed(DetailedTomlDependency {
-                    version: Some(s.clone()),
-                    ..Default::default()
-                })),
+        /// The Package/Project needs to be updated to updated to make sense, when this crate
+        /// is stand-alone.
+        /// Specifically:
+        /// 1. The license path may refer to something outside of the crate itself, e.g. another
+        ///    part of a Git repo. The `cargo package` subcommand will copy the license file into
+        ///    the root so we need to update the path to reflect this newly copied file.
+        /// 2. The package's workspace needs to be set to None. A workspace doesn't make sense
+        ///    in the stand-alone context
+        /// 3. The package's resolver needs to be set to the workspace's
+        /// 4. Any fields inherited from the workspace, need to be hydrated
+        fn map_package(
+            manifest: &TomlManifest,
+            ws: &Workspace<'_>,
+            inheritable: &InheritableFields,
+            package_root: &Path,
+        ) -> CargoResult<Box<TomlProject>> {
+            // Clone the existing package/project
+            let mut package = manifest
+                .package
+                .as_ref()
+                .or_else(|| manifest.project.as_ref())
+                .unwrap()
+                .clone();
+
+            // Set the workspace to None
+            package.workspace = None;
+            // Set the resolver to the workspace's ???
+            package.resolver = ws.resolve_behavior().to_manifest();
+
+            // Map the license file to the newly copied one
+            let map_license_file = || -> Option<String> {
+                package
+                    .hydrated_license_file(inheritable)
+                    .map(|license_file| {
+                        let path = Path::new(license_file);
+                        let abs_path = paths::normalize_path(&package_root.join(path));
+
+                        if let Err(_) = abs_path.strip_prefix(package_root) {
+                            Some(path.file_name().unwrap().to_str().unwrap().to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten()
+            };
+
+            // Update the license file
+            if let Some(updated_path) = map_license_file() {
+                package.license_file = Some(MaybeWorkspace::Defined(updated_path));
+            };
+
+            // Hydrate the edition
+            package.edition = package
+                .hydrated_edition(inheritable)
+                .cloned()
+                .map(|e| MaybeWorkspace::Defined(e));
+
+            // Hydrate the version
+            package.version = package
+                .hydrated_version(inheritable)
+                .map(|v| MaybeWorkspace::Defined(v.clone()))?;
+
+            // Hydrate the authors
+            package.authors = package
+                .hydrated_authors(inheritable)
+                .cloned()
+                .map(|a| MaybeWorkspace::Defined(a));
+
+            // Hydrate the publish flag
+            package.publish = package
+                .hydrated_publish(inheritable)
+                .cloned()
+                .map(|p| MaybeWorkspace::Defined(p));
+
+            // Hydrate the description
+            package.description = package
+                .hydrated_description(inheritable)
+                .cloned()
+                .map(|d| MaybeWorkspace::Defined(d));
+
+            // Hydrate the homepage
+            package.homepage = package
+                .hydrated_homepage(inheritable)
+                .cloned()
+                .map(|h| MaybeWorkspace::Defined(h));
+
+            // Hydrate the documentation
+            package.documentation = package
+                .hydrated_documentation(inheritable)
+                .cloned()
+                .map(|d| MaybeWorkspace::Defined(d));
+
+            // Hydrate the readme
+            package.readme = package
+                .hydrated_readme(inheritable)
+                .cloned()
+                .map(|r| MaybeWorkspace::Defined(r));
+
+            // Hydrate the keywords
+            package.keywords = package
+                .hydrated_keywords(inheritable)
+                .cloned()
+                .map(|k| MaybeWorkspace::Defined(k));
+
+            // Hydrate the categories
+            package.categories = package
+                .hydrated_categories(inheritable)
+                .cloned()
+                .map(|c| MaybeWorkspace::Defined(c));
+
+            // Hydrate the license
+            package.license = package
+                .hydrated_license(inheritable)
+                .cloned()
+                .map(|l| MaybeWorkspace::Defined(l));
+
+            // Hydrate the license_file
+            package.license_file = package
+                .hydrated_license_file(inheritable)
+                .cloned()
+                .map(|l| MaybeWorkspace::Defined(l));
+
+            // Hydrate the repository
+            package.repository = package
+                .hydrated_repository(inheritable)
+                .cloned()
+                .map(|r| MaybeWorkspace::Defined(r));
+
+            Ok(package)
+        }
+
+        /// The dependencies of our targets need to be mapped like our dependencies
+        fn map_targets(
+            config: &Config,
+            manifest: &TomlManifest,
+        ) -> CargoResult<Option<BTreeMap<String, TomlPlatform>>> {
+            let map_target = |target: &TomlPlatform| -> CargoResult<TomlPlatform> {
+                let all = |_d: &TomlDependency| true;
+
+                let dependencies = map_dependencies(config, target.dependencies.as_ref(), all)?;
+
+                let dev_deps = target
+                    .dev_dependencies
+                    .as_ref()
+                    .or_else(|| target.dev_dependencies2.as_ref());
+                let dev_dependencies =
+                    map_dependencies(config, dev_deps, TomlDependency::is_version_specified)?;
+
+                let build_deps = target
+                    .build_dependencies
+                    .as_ref()
+                    .or_else(|| target.build_dependencies2.as_ref());
+                let build_dependencies = map_dependencies(config, build_deps, all)?;
+
+                Ok(TomlPlatform {
+                    dependencies,
+                    dev_dependencies,
+                    build_dependencies,
+                    dev_dependencies2: None,
+                    build_dependencies2: None,
+                })
+            };
+
+            if let Some(targets) = manifest.target.as_ref() {
+                let updated_targets = targets
+                    .iter()
+                    .map(|(name, target)| Ok((name.clone(), map_target(target)?)))
+                    .collect::<CargoResult<BTreeMap<String, TomlPlatform>>>()?;
+
+                Ok(Some(updated_targets))
+            } else {
+                Ok(None)
             }
         }
+
+        // "Utility closure" that doesn't filter anything
+        let all = |_d: &TomlDependency| true;
+
+        // Map the package
+        let package = Some(map_package(self, ws, inheritable, package_root)?);
+
+        // Hydrate our dependencies from the workspace
+        let hydrated_deps = self.hydrated_dependencies(inheritable)?;
+        // Map our dependencies to remove path and git components
+        let dependencies = map_dependencies(config, hydrated_deps.as_ref(), all)?;
+        // Wrap our dependencies into a serializable type
+        let dependencies = dependencies.map(|deps| {
+            deps.into_iter()
+                .map(|(n, dep)| (n, MaybeWorkspace::Defined(dep)))
+                .collect()
+        });
+
+        // For historical reasons, dev dependencies is either named `dev-dependencies` or
+        // `dev_dependencies`, check for both, prefering the first
+        let dev_deps = self
+            .dev_dependencies
+            .as_ref()
+            .or_else(|| self.dev_dependencies2.as_ref());
+        let dev_dependencies =
+            map_dependencies(config, dev_deps, TomlDependency::is_version_specified)?;
+
+        // For historical reasons, dev dependencies is either named `build-dependencies` or
+        // `build_dependencies`, check for both, prefering the first.
+        let build_deps = self
+            .build_dependencies
+            .as_ref()
+            .or_else(|| self.build_dependencies2.as_ref());
+        let build_dependencies = map_dependencies(config, build_deps, all)?;
+
+        // Map the dependencies of our targets like we map the dependencies of ourselves
+        let target = map_targets(config, self)?;
+
+        // Hydrate our badges from the workspace, and then wrap them in a serializable type
+        let hydrated_badges = self.hydrated_badges(inheritable)?;
+        let badges = hydrated_badges.map(|badges| {
+            badges.into_iter()
+                .map(|(name, badge)| (name, MaybeWorkspace::Defined(badge)))
+                .collect()
+        });
+
+        // None of these fields need to be modified
+        let profile = self.profile.clone();
+        let lib = self.lib.clone();
+        let bin = self.bin.clone();
+        let example = self.example.clone();
+        let test = self.test.clone();
+        let bench = self.bench.clone();
+        let features = self.features.clone();
+        let cargo_features = self.cargo_features.clone();
+
+        // We don't want to supply any of these fields
+        let project = None;
+        let dev_dependencies2 = None;
+        let build_dependencies2 = None;
+        let replace = None;
+        let patch = None;
+        let workspace = None;
+
+        return Ok(TomlManifest {
+            package,
+            project,
+            profile,
+            lib,
+            bin,
+            example,
+            test,
+            bench,
+            dependencies,
+            dev_dependencies,
+            dev_dependencies2,
+            build_dependencies,
+            build_dependencies2,
+            features,
+            target,
+            replace,
+            patch,
+            workspace,
+            badges,
+            cargo_features,
+        });
     }
 
     pub fn to_real_manifest(
